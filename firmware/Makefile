@@ -91,6 +91,15 @@ ifeq ($(CONFIG_FIVE_TEE_DRIVER),y)
 include $(srctree)/firmware/five/Makefile
 endif
 
+quiet_cmd_ihex  = IHEX    $@
+      cmd_ihex  = $(OBJCOPY) -Iihex -Obinary $< $@
+
+quiet_cmd_ihex2fw  = IHEX2FW $@
+      cmd_ihex2fw  = $(objtree)/$(obj)/ihex2fw $< $@
+
+quiet_cmd_h16tofw  = H16TOFW $@
+      cmd_h16tofw  = $(objtree)/$(obj)/ihex2fw -w $< $@
+
 quiet_cmd_fwbin = MK_FW   $@
       cmd_fwbin = FWNAME="$(patsubst firmware/%.gen.S,%,$@)";		     \
 		  FWSTR="$(subst /,_,$(subst .,_,$(subst -,_,$(patsubst	     \
@@ -123,11 +132,21 @@ wordsize_deps := $(wildcard include/config/64bit.h include/config/32bit.h \
 		include/config/x86_32.h include/config/x86_64.h \
 		firmware/Makefile)
 
+
+# We need to use a relative path for the objtree, fwabs points to the source
+# tree where .bin files are not generated
+$(patsubst %,$(obj)/%.gen.S, $(fw-shipped-y)): %: $(wordsize_deps)
+	$(call cmd,fwbin,$(patsubst %.gen.S,%,$@))
+>>>>>>> 524e5e9a0d37 (firmware: fix out of source build)
 $(patsubst %,$(obj)/%.gen.S, $(fw-external-y)): %: $(wordsize_deps)
-	$(call cmd,fwbin,$(fwabs)/$(patsubst $(obj)/%.gen.S,%,$@))
+	$(call cmd,fwbin,$(patsubst %.gen.S,%,$@))
 
 # The .o files depend on the binaries directly; the .S files don't.
+
 $(patsubst %,$(obj)/%.gen.o, $(fw-external-y)): $(obj)/%.gen.o: $(fwdir)/%
+$(patsubst %,$(obj)/%.gen.o, $(fw-shipped-y)): %.gen.o: %
+$(patsubst %,$(obj)/%.gen.o, $(fw-external-y)): %.gen.o: %
+>>>>>>> 524e5e9a0d37 (firmware: fix out of source build)
 
 obj-y				 += $(patsubst %,%.gen.o, $(fw-external-y))
 
