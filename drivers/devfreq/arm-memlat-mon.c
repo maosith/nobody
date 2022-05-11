@@ -47,6 +47,7 @@ struct event_data {
 	struct perf_event *pevent;
 	unsigned long prev_count;
 	unsigned long last_delta;
+
 };
 
 struct cpu_data {
@@ -199,6 +200,9 @@ static unsigned long read_event(struct cpu_pmu_stats *cpustats, int event_id)
 		return 0;
 
 
+
+
+	total = perf_event_read_value(event->pevent, &enabled, &running);
 	ev_count = total - event->prev_count;
 	event->prev_count = total;
 	event->last_delta = ev_count;
@@ -324,6 +328,7 @@ static void compute_perf_counters(struct ipi_data *ipd, int cpu)
 static unsigned long get_cnt(struct memlat_hwmon *hw)
 {
 
+
 	struct memlat_mon *mon = to_mon(hw);
 	struct memlat_cpu_grp *cpu_grp = mon->cpu_grp;
 	unsigned int cpu;
@@ -421,6 +426,17 @@ static unsigned long get_cnt(struct memlat_hwmon *hw)
 	__set_current_state(TASK_RUNNING);
 
 
+	/*
+	 * Some of SCM call is very heavy(+20ms) so perf IPI could
+	 * be stuck on the CPU which contributes long latency.
+	 */
+	if (under_scm_call()) {
+		return 0;
+	}
+
+	for_each_cpu(cpu, &cpu_grp->cpus)
+		read_perf_counters(cpu, cpu_grp);
+
 	return 0;
 }
 
@@ -475,6 +491,7 @@ static int set_event(struct event_data *ev, int cpu, unsigned int event_id,
 		perf_event_enable(pevent);
 		if (cpumask_equal(&pevent->readable_on_cpus, &CPU_MASK_ALL))
 			cpu_grp->any_cpu_ev_mask |= BIT(i);
+
 	}
 
 
