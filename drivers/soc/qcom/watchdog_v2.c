@@ -118,11 +118,19 @@ struct msm_watchdog_data {
 	bool user_pet_complete;
 	unsigned long long timer_fired;
 	unsigned long long thread_start;
+	unsigned long long ping_start[NR_CPUS];
+	unsigned long long ping_end[NR_CPUS];
 	struct work_struct irq_counts_work;
 	struct irq_info irq_counts[NR_TOP_HITTERS];
 	struct irq_info ipi_counts[NR_IPI];
 	unsigned int tot_irq_count[NR_CPUS];
 	atomic_t irq_counts_running;
+
+	unsigned int cpu_scandump_sizes[NR_CPUS];
+
+	/* When single buffer is used to collect Scandump */
+	unsigned int scandump_size;
+
 };
 
 #ifdef CONFIG_SEC_DEBUG
@@ -773,6 +781,7 @@ void msm_trigger_wdog_bite(void)
 		__raw_readl(wdog_data->base + WDT0_EN),
 		__raw_readl(wdog_data->base + WDT0_BARK_TIME),
 		__raw_readl(wdog_data->base + WDT0_BITE_TIME));
+
 	/*
 	 * This function induces the non-secure bite and control
 	 * should not return to the calling function. Non-secure
@@ -782,6 +791,68 @@ void msm_trigger_wdog_bite(void)
 	 */
 	while (1)
 		udelay(1);
+
+}
+
+static void print_wdog_data(struct msm_watchdog_data *wdog_dd)
+{
+	unsigned long long last_pet;
+	unsigned long nanosec_rem;
+	struct task_struct *wdog_task;
+	int cpu;
+	struct cpumask *bark_affinity;
+
+	last_pet = wdog_dd->last_pet;
+	nanosec_rem = do_div(last_pet, 1000000000);
+	dev_info(wdog_dd->dev, "Watchdog last pet at %lu.%06lu\n",
+			(unsigned long) last_pet, nanosec_rem / 1000);
+	if (wdog_dd->do_ipi_ping)
+		dump_cpu_alive_mask(wdog_dd);
+
+	/* Print pet, bark and bite expire times */
+	dev_info(wdog_dd->dev, "Pet: %dms, Bark: %dms, Bite: %dms\n",
+			wdog_dd->pet_time, wdog_dd->bark_time,
+			wdog_dd->bark_time + WDOG_BITE_OFFSET_IN_SECONDS*1000);
+
+	/* Check if pet task is running */
+	wdog_task = wdog_dd->watchdog_task;
+	if (wdog_task) {
+		if (wdog_task->state == TASK_UNINTERRUPTIBLE) {
+			unsigned long dead_mask;
+
+			dev_info(wdog_dd->dev, "Pet task is running on CPU%d\n",
+					task_cpu(wdog_task));
+
+			dead_mask = atomic_read(&wdog_dd->alive_mask) ^
+				    atomic_read(&wdog_dd->pinged_mask);
+			for_each_cpu(cpu, to_cpumask(&dead_mask)) {
+				dev_info(wdog_dd->dev,
+					 "CPU%d did not respond to IPI ping\n",
+					 cpu);
+			}
+		} else if (wdog_task->state == TASK_RUNNING) {
+			dev_info(wdog_dd->dev, "Pet task is waiting on CPU%d\n",
+					task_cpu(wdog_task));
+		} else if (wdog_dd->timer_expired) {
+			dev_info(wdog_dd->dev,
+				"Pet timer expired but pet task not queued\n");
+		} else {
+			dev_info(wdog_dd->dev,
+				"Pet timer not expired, queued on CPU%d\n",
+				wdog_dd->pet_timer.flags & TIMER_CPUMASK);
+		}
+	}
+
+	/* Print current jiffies and pet timer expiring jiffies */
+	dev_info(wdog_dd->dev, "Current jiffies:  %lu\n", jiffies);
+	dev_info(wdog_dd->dev, "Pet timer expire: %lu\n",
+			wdog_dd->pet_timer.expires);
+
+	/* Print watchdog bark IRQ affinity mask */
+	bark_affinity = irq_get_affinity_mask(wdog_dd->bark_irq);
+	dev_info(wdog_dd->dev, "Watchdog bark IRQ %d CPU affinity: %*pbl\n",
+			wdog_dd->bark_irq, cpumask_pr_args(bark_affinity));
+
 }
 
 static irqreturn_t wdog_bark_handler(int irq, void *dev_id)
@@ -799,7 +870,7 @@ static irqreturn_t wdog_bark_handler(int irq, void *dev_id)
 	nanosec_rem = do_div(wdog_dd->last_pet, 1000000000);
 	dev_info(wdog_dd->dev, "Watchdog last pet at %lu.%06lu\n",
 			(unsigned long) wdog_dd->last_pet, nanosec_rem / 1000);
-	dev_info(wdog_dd->dev, "Watchdog pet_timer on cpu %d, expires = 0x%lx, jiffies = 0x%lx\n",
+	dev_info(wdog_dd->dev, "Watchdog pet_timer on cpu %d, expires = 0x%llx, jiffies = 0x%llx\n",
 			get_cpu_where_timer_on(&wdog_dd->pet_timer), wdog_dd->pet_timer.expires, jiffies);
 
 	if (wdog_dd->do_ipi_ping)
