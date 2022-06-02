@@ -171,6 +171,13 @@ struct ipi_data {
 	atomic_t cpus_left;
 };
 
+struct ipi_data {
+	unsigned long cnts[NR_CPUS][NUM_EVENTS];
+	struct task_struct *waiter_task;
+	struct cpu_grp_info *cpu_grp;
+	atomic_t cpus_left;
+};
+
 #define to_cpustats(cpu_grp, cpu) \
 	(&cpu_grp->cpustats[cpu - cpumask_first(&cpu_grp->cpus)])
 #define to_devstats(cpu_grp, cpu) \
@@ -181,6 +188,7 @@ struct ipi_data {
 static struct workqueue_struct *memlat_wq;
 
 #define MAX_COUNT_LIM 0xFFFFFFFFFFFFFFFF
+
 
 static inline void read_event(struct event_data *event)
 {
@@ -203,10 +211,21 @@ static unsigned long read_event(struct cpu_pmu_stats *cpustats, int event_id)
 
 
 	total = perf_event_read_value(event->pevent, &enabled, &running);
+static unsigned long read_event(struct cpu_pmu_stats *cpustats, int event_id)
+{
+	struct event_data *event = &cpustats->events[event_id];
+	unsigned long ev_count;
+	u64 total;
+
+	if (!event->pevent || perf_event_read_local(event->pevent, &total))
+		return 0;
+
+
 	ev_count = total - event->prev_count;
 	event->prev_count = total;
 	event->last_delta = ev_count;
 }
+
 
 
 static void update_counts(struct memlat_cpu_grp *cpu_grp)
@@ -255,6 +274,10 @@ static void update_counts(struct memlat_cpu_grp *cpu_grp)
 
 static void read_perf_counters(struct ipi_data *ipd, int cpu)
 {
+
+static void read_perf_counters(struct ipi_data *ipd, int cpu)
+{
+
 	struct cpu_grp_info *cpu_grp = ipd->cpu_grp;
 	struct cpu_pmu_stats *cpustats = to_cpustats(cpu_grp, cpu);
 	int ev;
@@ -327,6 +350,7 @@ static void compute_perf_counters(struct ipi_data *ipd, int cpu)
 
 static unsigned long get_cnt(struct memlat_hwmon *hw)
 {
+
 
 
 	struct memlat_mon *mon = to_mon(hw);
@@ -403,6 +427,7 @@ static unsigned long get_cnt(struct memlat_hwmon *hw)
 	/* Clear out CPUs which were skipped */
 	atomic_andnot(cpus_read_mask ^ tmp_mask, &ipd.cpus_left);
 
+
 	/*
 	 * Wait until all the IPIs are done reading their events, and compute
 	 * each finished CPU's results while waiting since some CPUs may finish
@@ -426,16 +451,28 @@ static unsigned long get_cnt(struct memlat_hwmon *hw)
 	__set_current_state(TASK_RUNNING);
 
 
-	/*
-	 * Some of SCM call is very heavy(+20ms) so perf IPI could
-	 * be stuck on the CPU which contributes long latency.
-	 */
-	if (under_scm_call()) {
-		return 0;
-	}
 
-	for_each_cpu(cpu, &cpu_grp->cpus)
-		read_perf_counters(cpu, cpu_grp);
+	/*
+	 * Wait until all the IPIs are done reading their events, and compute
+	 * each finished CPU's results while waiting since some CPUs may finish
+	 * reading their events faster than others.
+	 */
+	for (tmp_mask = cpus_read_mask;;) {
+		unsigned long cpus_done, cpus_left;
+
+		set_current_state(TASK_UNINTERRUPTIBLE);
+		cpus_left = (unsigned int)atomic_read(&ipd.cpus_left);
+		if ((cpus_done = cpus_left ^ tmp_mask)) {
+			for_each_cpu(cpu, to_cpumask(&cpus_done))
+				compute_perf_counters(&ipd, cpu);
+			if (!cpus_left)
+				break;
+			tmp_mask = cpus_left;
+		} else {
+			schedule();
+		}
+	}
+	__set_current_state(TASK_RUNNING);
 
 	return 0;
 }
@@ -491,6 +528,9 @@ static int set_event(struct event_data *ev, int cpu, unsigned int event_id,
 		perf_event_enable(pevent);
 		if (cpumask_equal(&pevent->readable_on_cpus, &CPU_MASK_ALL))
 			cpu_grp->any_cpu_ev_mask |= BIT(i);
+
+
+
 
 	}
 
