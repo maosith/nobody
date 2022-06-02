@@ -28,6 +28,8 @@
 #define SCM_INTERRUPTED		1
 #define SCM_V2_EBUSY		-12
 
+
+static DEFINE_PER_CPU(atomic_t, scm_call_count);
 static DEFINE_MUTEX(scm_lock);
 
 /*
@@ -135,6 +137,65 @@ static int __scm_call_armv8_64(u64 x0, u64 x1, u64 x2, u64 x3, u64 x4, u64 x5,
 #else
 			: "x7", "x8", "x9", "x10", "x11", "x12", "x13",
 			  "x14", "x15", "x16", "x17");
+
+
+	} while (r0 == SCM_INTERRUPTED);
+	ATRACE_END();
+
+	if (ret1)
+		*ret1 = r1;
+	if (ret2)
+		*ret2 = r2;
+	if (ret3)
+		*ret3 = r3;
+
+	return r0;
+}
+
+static int __scm_call_armv8_64(u64 x0, u64 x1, u64 x2, u64 x3, u64 x4, u64 x5,
+				u64 *ret1, u64 *ret2, u64 *ret3)
+{
+	atomic_t *cnt = per_cpu_ptr(&scm_call_count, raw_smp_processor_id());
+	int ret;
+
+	atomic_inc(cnt);
+	ret = ___scm_call_armv8_64(x0, x1, x2, x3, x4, x5, ret1, ret2, ret3);
+	atomic_dec(cnt);
+
+	return ret;
+}
+
+static int ___scm_call_armv8_32(u32 w0, u32 w1, u32 w2, u32 w3, u32 w4, u32 w5,
+				u64 *ret1, u64 *ret2, u64 *ret3)
+{
+	register u32 r0 asm("w0") = w0;
+	register u32 r1 asm("w1") = w1;
+	register u32 r2 asm("w2") = w2;
+	register u32 r3 asm("w3") = w3;
+	register u32 r4 asm("w4") = w4;
+	register u32 r5 asm("w5") = w5;
+	register u32 r6 asm("w6") = 0;
+
+	ATRACE_BEGIN(__func__);
+	do {
+		asm volatile(
+			__asmeq("%0", R0_STR)
+			__asmeq("%1", R1_STR)
+			__asmeq("%2", R2_STR)
+			__asmeq("%3", R3_STR)
+			__asmeq("%4", R4_STR)
+			__asmeq("%5", R5_STR)
+			__asmeq("%6", R6_STR)
+			__asmeq("%7", R0_STR)
+			__asmeq("%8", R1_STR)
+			__asmeq("%9", R2_STR)
+			__asmeq("%10", R3_STR)
+			__asmeq("%11", R4_STR)
+			__asmeq("%12", R5_STR)
+			__asmeq("%13", R6_STR)
+#ifdef REQUIRES_SEC
+			".arch_extension sec\n"
+
 #endif
 	} while (r0 == SCM_INTERRUPTED);
 
@@ -151,6 +212,7 @@ static int __scm_call_armv8_64(u64 x0, u64 x1, u64 x2, u64 x3, u64 x4, u64 x5,
 static int __scm_call_armv8_32(u32 w0, u32 w1, u32 w2, u32 w3, u32 w4, u32 w5,
 				u64 *ret1, u64 *ret2, u64 *ret3)
 {
+
 	register u32 r0 asm("w0") = w0;
 	register u32 r1 asm("w1") = w1;
 	register u32 r2 asm("w2") = w2;
@@ -190,6 +252,14 @@ static int __scm_call_armv8_32(u32 w0, u32 w1, u32 w2, u32 w3, u32 w4, u32 w5,
 			: "x7", "x8", "x9", "x10", "x11", "x12", "x13",
 			"x14", "x15", "x16", "x17");
 #endif
+
+	atomic_t *cnt = per_cpu_ptr(&scm_call_count, raw_smp_processor_id());
+	int ret;
+
+	atomic_inc(cnt);
+	ret = ___scm_call_armv8_32(w0, w1, w2, w3, w4, w5, ret1, ret2, ret3);
+	atomic_dec(cnt);
+
 
 	} while (r0 == SCM_INTERRUPTED);
 
@@ -252,6 +322,22 @@ static int __scm_call_armv8_32(u32 w0, u32 w1, u32 w2, u32 w3, u32 w4, u32 w5,
 
 	return r0;
 }
+
+
+
+static int __scm_call_armv8_32(u32 w0, u32 w1, u32 w2, u32 w3, u32 w4, u32 w5,
+				u64 *ret1, u64 *ret2, u64 *ret3)
+{
+	atomic_t *cnt = per_cpu_ptr(&scm_call_count, raw_smp_processor_id());
+	int ret;
+
+	atomic_inc(cnt);
+	ret = ___scm_call_armv8_32(w0, w1, w2, w3, w4, w5, ret1, ret2, ret3);
+	atomic_dec(cnt);
+
+	return ret;
+}
+
 
 static int __scm_call_armv8_64(u64 x0, u64 x1, u64 x2, u64 x3, u64 x4, u64 x5,
 				u64 *ret1, u64 *ret2, u64 *ret3)
@@ -706,7 +792,14 @@ static int __init scm_mem_protection_init(void)
 	return resp;
 }
 
+
 early_initcall(scm_mem_protection_init);
 #endif
 
 #endif
+
+bool under_scm_call(int cpu)
+{
+	return atomic_read(per_cpu_ptr(&scm_call_count, cpu));
+}
+
